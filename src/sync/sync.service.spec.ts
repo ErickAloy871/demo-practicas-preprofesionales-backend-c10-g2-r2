@@ -44,6 +44,30 @@ describe('SyncService', () => {
     expect(result.hasMore).toBe(false)
   })
 
+  it('does not skip records with the exact same millisecond timestamp', async () => {
+    const time = new Date('2026-04-01T12:00:00.000Z')
+    const allRecords = [
+      { id: 10, updatedAt: time, placementId: 1 },
+      { id: 11, updatedAt: time, placementId: 1 },
+    ]
+
+    prisma.client.hourLog.findMany.mockImplementation(async ({ where, take }) => {
+      // Simulate simple filter based on the new cursor logic
+      const hasCursor = where?.OR !== undefined
+      const gtId = hasCursor ? where.OR[1].id.gt : 0
+      return allRecords.filter((r) => r.id > gtId).slice(0, take)
+    })
+
+    const result1 = await service.pull(5, undefined, 1)
+    expect(result1.changes.hourLogs).toHaveLength(1)
+    expect((result1.changes.hourLogs[0] as { id: number }).id).toBe(10)
+    expect(result1.hasMore).toBe(true)
+
+    const result2 = await service.pull(5, result1.checkpoint || undefined, 1)
+    expect(result2.changes.hourLogs).toHaveLength(1)
+    expect((result2.changes.hourLogs[0] as { id: number }).id).toBe(11)
+  })
+
   it('applies a create operation and returns applied', async () => {
     const result = await service.push(5, [makeCreateOp('11111111-1111-4111-8111-111111111111')])
 
