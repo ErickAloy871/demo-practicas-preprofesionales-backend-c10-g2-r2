@@ -183,6 +183,11 @@ export class SyncService {
     }
 
     if (op.op === 'update') {
+      // El servidor manda sobre el estado: una hora ya revisada no se pisa.
+      if (existing.status === 'APPROVED' || existing.status === 'REJECTED') {
+        return rejectOp(op.clientOpId, 'el tutor ya revisó esta hora; tu edición no se aplicó')
+      }
+
       const updated = await tx.hourLog.update({
         where: { id: Number(op.payload.id) },
         data: {

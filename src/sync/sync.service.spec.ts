@@ -114,4 +114,49 @@ describe('SyncService', () => {
     expect(prisma.state.hourLogs).toHaveLength(1)
     expect(prisma.state.syncOps.size).toBe(1)
   })
+
+  function makeUpdateOp(clientOpId: string): SyncOperationInput {
+    return {
+      clientOpId,
+      entity: 'hourLog',
+      op: 'update',
+      baseVersion: 1,
+      payload: {
+        id: 99,
+        date: '2026-04-03',
+        startTime: '09:00',
+        endTime: '13:00',
+        hours: 4,
+        activity: 'Actualizado offline',
+      },
+    }
+  }
+
+  it('rejects an update when the hour log was already approved or rejected', async () => {
+    prisma.client.hourLog.findUnique.mockResolvedValue({
+      id: 99,
+      status: 'APPROVED',
+      placement: { studentId: 5 },
+    })
+
+    const result = await service.push(5, [makeUpdateOp('44444444-4444-4444-8444-444444444444')])
+
+    expect(result.results[0]).toMatchObject({ status: 'rejected', server: null })
+    expect(result.results[0].reason).toMatch(/tutor/)
+    expect(prisma.client.hourLog.update).not.toHaveBeenCalled()
+  })
+
+  it('applies an update when the hour log is still draft or submitted', async () => {
+    prisma.client.hourLog.findUnique.mockResolvedValue({
+      id: 99,
+      status: 'SUBMITTED',
+      placement: { studentId: 5 },
+    })
+    prisma.client.hourLog.update.mockResolvedValue({ id: 99, status: 'SUBMITTED', version: 2 })
+
+    const result = await service.push(5, [makeUpdateOp('55555555-5555-4555-8555-555555555555')])
+
+    expect(result.results[0]).toMatchObject({ status: 'applied' })
+    expect(prisma.client.hourLog.update).toHaveBeenCalled()
+  })
 })
