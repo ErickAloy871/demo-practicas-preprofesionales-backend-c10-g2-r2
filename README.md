@@ -33,7 +33,7 @@ máquina, cambia `POSTGRES_PORT` y `DATABASE_URL` en `.env` antes de `docker com
 | `DATABASE_URL` | (requerido) | Cadena de conexión PostgreSQL |
 | `JWT_SECRET` | (requerido) | Secreto para firmar JWTs |
 | `PORT` | `3000` | Puerto donde escucha la API |
-| `CORS_ORIGIN` | `http://localhost:5173` | Origen permitido para requests desde el navegador (frontend Vite) |
+| `CORS_ORIGIN` | `http://localhost:5173,http://localhost:5174` | Orígenes permitidos, separados por comas, para requests desde el navegador (frontend Vite) |
 
 Usuarios del seed (contraseña `yura1234` para todos):
 
