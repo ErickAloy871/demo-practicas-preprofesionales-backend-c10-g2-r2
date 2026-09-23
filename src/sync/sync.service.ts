@@ -1,17 +1,54 @@
-import { Injectable } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { type Checkpoint, decodeCheckpoint, encodeCheckpoint } from './checkpoint'
 import type { SyncOperationInput, SyncOperationResult } from './dto/push.dto'
 
+type StoredResponse = SyncOperationResult
+
+const P2002 = 'P2002'
+
+function asStoredResponse(value: unknown): StoredResponse {
+  return value as StoredResponse
+}
+
+function extractHourLogData(payload: Record<string, unknown>) {
+  return {
+    date: new Date(String(payload.date)),
+    startTime: String(payload.startTime),
+    endTime: String(payload.endTime),
+    hours: Number(payload.hours),
+    activity: String(payload.activity),
+  }
+}
+
+export interface SyncPullResponse {
+  changes: { placements: unknown[]; hourLogs: unknown[]; documents: unknown[]; evaluations: unknown[] }
+  checkpoint: string | null
+  hasMore: boolean
+}
+
+export interface SyncPushResponse {
+  results: SyncOperationResult[]
+}
+
 @Injectable()
 export class SyncService {
+  private readonly logger = new Logger(SyncService.name)
+
   constructor(private readonly prisma: PrismaService) {}
 
-  async pull(userId: number, since: string | undefined, limit: number) {
+  async pull(userId: number, since: string | undefined, limit: number): Promise<SyncPullResponse> {
     const cursor = decodeCheckpoint(since)
-    // El cursor avanza por updatedAt.
-    const where = cursor ? { updatedAt: { gt: new Date(cursor.updatedAt) } } : {}
-    const order = { updatedAt: 'asc' as const }
+    const where = cursor
+      ? {
+          OR: [
+            { updatedAt: { gt: new Date(cursor.updatedAt) } },
+            { updatedAt: new Date(cursor.updatedAt), id: { gt: cursor.id } },
+          ],
+        }
+      : {}
+    const order = [{ updatedAt: 'asc' as const }, { id: 'asc' as const }]
     const scope = { placement: { OR: [{ studentId: userId }, { tutorId: userId }] } }
 
     const [placements, hourLogs, documents, evaluations] = await Promise.all([
@@ -25,8 +62,11 @@ export class SyncService {
       this.prisma.evaluation.findMany({ where: { ...where, ...scope }, orderBy: order, take: limit }),
     ])
 
-    const newest = [...placements, ...hourLogs, ...documents, ...evaluations]
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]
+    const newest = [...placements, ...hourLogs, ...documents, ...evaluations].sort((a, b) => {
+      const timeDiff = new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      if (timeDiff !== 0) return timeDiff
+      return b.id - a.id
+    })[0]
 
     const checkpoint: Checkpoint | null = newest
       ? { updatedAt: new Date(newest.updatedAt).toISOString(), id: newest.id }
@@ -39,89 +79,141 @@ export class SyncService {
     }
   }
 
-  async push(userId: number, ops: SyncOperationInput[]) {
+  async push(userId: number, ops: SyncOperationInput[]): Promise<SyncPushResponse> {
     const results: SyncOperationResult[] = []
     for (const op of ops) {
-      let result: SyncOperationResult
-      try {
-        // D-01: sync_operations se escribe pero NUNCA se consulta antes de
-        // aplicar. Un reintento con el mismo clientOpId aplica dos veces.
-        result = await this.applyOperation(userId, op)
-      } catch (err) {
-        result = {
-          clientOpId: op.clientOpId,
-          status: 'rejected',
-          server: null,
-          reason: err instanceof Error ? err.message : 'no se pudo aplicar la operación',
-        }
-      }
-      try {
-        await this.prisma.syncOperation.create({
-          data: { clientOpId: op.clientOpId, userId, response: result as unknown as object },
-        })
-      } catch {
-        // clientOpId es la clave primaria: un reintento choca con el
-        // registro previo. El log de sync_operations se ignora, pero la
-        // operación de negocio ya se aplicó arriba — eso es D-01.
-      }
-      results.push(result)
+      results.push(await this.processOperation(userId, op))
     }
     return { results }
   }
 
-  private async applyOperation(userId: number, op: SyncOperationInput): Promise<SyncOperationResult> {
-    if (op.entity !== 'hourLog') {
-      return { clientOpId: op.clientOpId, status: 'rejected', server: null, reason: 'entidad no sincronizable desde el cliente' }
-    }
+  private async processOperation(userId: number, op: SyncOperationInput): Promise<SyncOperationResult> {
+    const cached = await this.fetchStored(op.clientOpId)
+    if (cached) return cached
 
-    if (op.op === 'create') {
-      const placement = await this.prisma.placement.findUnique({ where: { id: Number(op.payload.placementId) } })
-      if (!placement || placement.studentId !== userId) {
-        return { clientOpId: op.clientOpId, status: 'rejected', server: null, reason: 'el placement no pertenece al usuario' }
+    try {
+      return await this.applyAndStore(userId, op)
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        const winner = await this.fetchStored(op.clientOpId)
+        if (winner) return winner
       }
+      this.logger.warn(`Error al aplicar operación ${op.clientOpId}: ${err instanceof Error ? err.message : String(err)}`)
+      return this.reject(op.clientOpId, err)
+    }
+  }
 
-      const created = await this.prisma.hourLog.create({
-        data: {
-          placementId: Number(op.payload.placementId),
-          date: new Date(String(op.payload.date)),
-          startTime: String(op.payload.startTime),
-          endTime: String(op.payload.endTime),
-          hours: Number(op.payload.hours),
-          activity: String(op.payload.activity),
-          status: 'SUBMITTED',
-        },
-      })
-      return { clientOpId: op.clientOpId, status: 'applied', server: created as never, reason: null }
+  private async fetchStored(clientOpId: string): Promise<StoredResponse | null> {
+    const row = await this.prisma.syncOperation.findUnique({ where: { clientOpId } })
+    return row ? asStoredResponse(row.response) : null
+  }
+
+  private async applyAndStore(userId: number, op: SyncOperationInput): Promise<SyncOperationResult> {
+    return this.prisma.$transaction(async (tx) => {
+      const winner = await tx.syncOperation.findUnique({ where: { clientOpId: op.clientOpId } })
+      if (winner) return asStoredResponse(winner.response)
+
+      const applied = await this.applyOperation(tx, userId, op)
+      if (applied.status === 'applied') {
+        await tx.syncOperation.create({
+          data: {
+            clientOpId: op.clientOpId,
+            userId,
+            response: applied as unknown as Prisma.InputJsonValue,
+          },
+        })
+      }
+      return applied
+    })
+  }
+
+  private reject(clientOpId: string, err: unknown): SyncOperationResult {
+    return {
+      clientOpId,
+      status: 'rejected',
+      server: null,
+      reason: err instanceof Error ? err.message : 'no se pudo aplicar la operación',
+    }
+  }
+
+  private async applyOperation(
+    tx: Prisma.TransactionClient,
+    userId: number,
+    op: SyncOperationInput,
+  ): Promise<SyncOperationResult> {
+    if (op.entity !== 'hourLog') {
+      return rejectOp(op.clientOpId, 'entidad no sincronizable desde el cliente')
     }
 
-    const existing = await this.prisma.hourLog.findUnique({
+    if (op.op === 'create') return this.createHourLog(tx, userId, op)
+    return this.mutateHourLog(tx, userId, op)
+  }
+
+  private async createHourLog(
+    tx: Prisma.TransactionClient,
+    userId: number,
+    op: SyncOperationInput,
+  ): Promise<SyncOperationResult> {
+    const placement = await tx.placement.findUnique({ where: { id: Number(op.payload.placementId) } })
+    if (!placement || placement.studentId !== userId) {
+      return rejectOp(op.clientOpId, 'el placement no pertenece al usuario')
+    }
+
+    const created = await tx.hourLog.create({
+      data: {
+        placementId: Number(op.payload.placementId),
+        ...extractHourLogData(op.payload),
+        status: 'SUBMITTED',
+      },
+    })
+    return applyOp(op.clientOpId, created)
+  }
+
+  private async mutateHourLog(
+    tx: Prisma.TransactionClient,
+    userId: number,
+    op: SyncOperationInput,
+  ): Promise<SyncOperationResult> {
+    const existing = await tx.hourLog.findUnique({
       where: { id: Number(op.payload.id) },
       include: { placement: true },
     })
     if (!existing || existing.placement.studentId !== userId) {
-      return { clientOpId: op.clientOpId, status: 'rejected', server: null, reason: 'el registro no pertenece al usuario' }
+      return rejectOp(op.clientOpId, 'el registro no pertenece al usuario')
     }
 
     if (op.op === 'update') {
-      // La actualización aplica los campos recibidos y avanza version.
-      const updated = await this.prisma.hourLog.update({
+      // El servidor manda sobre el estado: una hora ya revisada no se pisa.
+      if (existing.status === 'APPROVED' || existing.status === 'REJECTED') {
+        return rejectOp(op.clientOpId, 'el tutor ya revisó esta hora; tu edición no se aplicó')
+      }
+
+      const updated = await tx.hourLog.update({
         where: { id: Number(op.payload.id) },
         data: {
-          date: new Date(String(op.payload.date)),
-          startTime: String(op.payload.startTime),
-          endTime: String(op.payload.endTime),
-          hours: Number(op.payload.hours),
-          activity: String(op.payload.activity),
+          ...extractHourLogData(op.payload),
           version: { increment: 1 },
         },
       })
-      return { clientOpId: op.clientOpId, status: 'applied', server: updated as never, reason: null }
+      return applyOp(op.clientOpId, updated)
     }
 
-    const deleted = await this.prisma.hourLog.update({
+    const deleted = await tx.hourLog.update({
       where: { id: Number(op.payload.id) },
       data: { deletedAt: new Date(), version: { increment: 1 } },
     })
-    return { clientOpId: op.clientOpId, status: 'applied', server: deleted as never, reason: null }
+    return applyOp(op.clientOpId, deleted)
   }
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === P2002
+}
+
+function rejectOp(clientOpId: string, reason: string): SyncOperationResult {
+  return { clientOpId, status: 'rejected', server: null, reason }
+}
+
+function applyOp(clientOpId: string, server: unknown): SyncOperationResult {
+  return { clientOpId, status: 'applied', server: server as Record<string, unknown>, reason: null }
 }
