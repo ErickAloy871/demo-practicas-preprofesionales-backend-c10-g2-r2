@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { ApplicationStatus } from '@prisma/client'
+import { ApplicationStatus, Role } from '@prisma/client'
+import { assertOwnership } from '../common/ownership'
 import { OfferService } from '../offer/offer.service'
 import { PrismaService } from '../prisma/prisma.service'
 
@@ -27,7 +28,14 @@ export class ApplicationService {
   }
 
   // D-04: N+1. Una consulta por la lista y otra por cada estudiante.
-  async listByOffer(offerId: number) {
+  /**
+   * E3-01 (hallazgo 2): solo la empresa dueña de la oferta (o la coordinación)
+   * ve sus postulantes. Antes bastaba el rol COMPANY, así que una empresa leía
+   * el nombre y el email de los postulantes de una oferta ajena (`HTTP 200`).
+   */
+  async listByOffer(offerId: number, userId: number, role: Role) {
+    await this.assertOfferAccess(offerId, userId, role, 'la oferta no es de tu empresa')
+
     const applications = await this.prisma.application.findMany({ where: { offerId } })
     const rows = []
     for (const application of applications) {
@@ -40,9 +48,15 @@ export class ApplicationService {
     return rows
   }
 
-  async decide(id: number, status: ApplicationStatus) {
+  /**
+   * E3-01 (hallazgo 3): solo la empresa dueña de la oferta (o la coordinación)
+   * decide sobre sus postulaciones. Antes una empresa aceptaba o rechazaba
+   * candidatos de una oferta ajena (`HTTP 200`).
+   */
+  async decide(id: number, status: ApplicationStatus, userId: number, role: Role) {
     const application = await this.prisma.application.findUnique({ where: { id } })
     if (!application) throw new NotFoundException('postulación no encontrada')
+    await this.assertOfferAccess(application.offerId, userId, role, 'la postulación no pertenece a una oferta de tu empresa')
     if (application.status !== ApplicationStatus.SUBMITTED && application.status !== ApplicationStatus.INTERVIEW) {
       throw new BadRequestException('la postulación ya fue decidida')
     }
@@ -59,5 +73,13 @@ export class ApplicationService {
       where: { id },
       data: { status, decidedAt: new Date() },
     })
+  }
+
+  private async assertOfferAccess(offerId: number, userId: number, role: Role, message: string): Promise<void> {
+    const offer = await this.prisma.offer.findUnique({ where: { id: offerId } })
+    if (!offer) throw new NotFoundException('oferta no encontrada')
+    if (role === Role.COORDINATOR) return
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { companyId: true } })
+    assertOwnership(user?.companyId != null && user.companyId === offer.companyId, role, message)
   }
 }

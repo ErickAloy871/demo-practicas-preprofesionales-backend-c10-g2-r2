@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { ApplicationStatus, OfferStatus } from '@prisma/client'
+import { ApplicationStatus, OfferStatus, Role } from '@prisma/client'
+import { assertOwnership } from '../common/ownership'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CreateOfferDto } from './dto/create-offer.dto'
 
@@ -7,7 +8,17 @@ import type { CreateOfferDto } from './dto/create-offer.dto'
 export class OfferService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(dto: CreateOfferDto) {
+  /**
+   * E3-01 (hallazgo 4a): una empresa no puede crear ofertas a nombre de otra.
+   * El `companyId` del body se compara contra la empresa del usuario
+   * autenticado; antes se persistía tal cual (`HTTP 201`). La coordinación
+   * sigue pudiendo crear ofertas para cualquier empresa.
+   */
+  async create(dto: CreateOfferDto, userId: number, role: Role) {
+    if (role !== Role.COORDINATOR) {
+      const companyId = await this.companyIdOf(userId)
+      assertOwnership(companyId != null && companyId === dto.companyId, role, 'no puedes crear ofertas a nombre de otra empresa')
+    }
     return this.prisma.offer.create({ data: { ...dto, status: OfferStatus.DRAFT } })
   }
 
@@ -19,9 +30,18 @@ export class OfferService {
     })
   }
 
-  async findOne(id: number) {
+  /**
+   * E3-01 (hallazgo 5): los borradores no son catálogo público. Solo la empresa
+   * dueña de la oferta y la coordinación pueden leerla antes de publicarla;
+   * antes cualquier rol autenticado veía el borrador completo (`HTTP 200`).
+   */
+  async findOne(id: number, userId: number, role: Role) {
     const offer = await this.prisma.offer.findUnique({ where: { id }, include: { company: true } })
     if (!offer) throw new NotFoundException('oferta no encontrada')
+    if (offer.status !== OfferStatus.PUBLISHED && role !== Role.COORDINATOR) {
+      const companyId = await this.companyIdOf(userId)
+      assertOwnership(companyId != null && companyId === offer.companyId, role, 'la oferta no está publicada')
+    }
     return offer
   }
 
@@ -39,9 +59,9 @@ export class OfferService {
     })
   }
 
-  async publish(id: number) {
-    const offer = await this.prisma.offer.findUnique({ where: { id } })
-    if (!offer) throw new NotFoundException('oferta no encontrada')
+  /** E3-01 (hallazgo 4b): publicar exige ser la empresa dueña de la oferta. */
+  async publish(id: number, userId: number, role: Role) {
+    const offer = await this.assertOwnsOffer(id, userId, role, 'la oferta no es de tu empresa')
     if (offer.status !== OfferStatus.DRAFT) {
       throw new BadRequestException('solo se publican ofertas en DRAFT')
     }
@@ -51,9 +71,9 @@ export class OfferService {
     })
   }
 
-  async close(id: number) {
-    const offer = await this.prisma.offer.findUnique({ where: { id } })
-    if (!offer) throw new NotFoundException('oferta no encontrada')
+  /** E3-01 (hallazgo 4c): cerrar exige ser la empresa dueña de la oferta. */
+  async close(id: number, userId: number, role: Role) {
+    const offer = await this.assertOwnsOffer(id, userId, role, 'la oferta no es de tu empresa')
     if (offer.status !== OfferStatus.PUBLISHED) {
       throw new BadRequestException('solo se cierran ofertas publicadas')
     }
@@ -65,5 +85,21 @@ export class OfferService {
     return this.prisma.application.count({
       where: { offerId, status: ApplicationStatus.ACCEPTED },
     })
+  }
+
+  private companyIdOf(userId: number): Promise<number | null> {
+    return this.prisma.user
+      .findUnique({ where: { id: userId }, select: { companyId: true } })
+      .then((user) => user?.companyId ?? null)
+  }
+
+  private async assertOwnsOffer(id: number, userId: number, role: Role, message: string) {
+    const offer = await this.prisma.offer.findUnique({ where: { id } })
+    if (!offer) throw new NotFoundException('oferta no encontrada')
+    if (role !== Role.COORDINATOR) {
+      const companyId = await this.companyIdOf(userId)
+      assertOwnership(companyId != null && companyId === offer.companyId, role, message)
+    }
+    return offer
   }
 }
