@@ -89,12 +89,25 @@ export class HourLogService {
   /**
    * Aprueba o rechaza un registro de horas.
    *
-   * Valida la máquina de estados: solo se revisan registros que están en
+   * E3-01 (hallazgo 1): el rol `TUTOR` no basta. Solo el tutor **asignado** a la
+   * práctica puede revisar sus horas; antes bastaba con ser tutor de cualquier
+   * práctica para aprobar o rechazar las ajenas (`HTTP 200`), lo que dejaba el
+   * acta de acreditación sin respaldo. El endpoint sigue siendo
+   * `@Roles(Role.TUTOR)` como antes, así que la coordinación no gana ni pierde
+   * permisos aquí.
+   *
+   * Valida además la máquina de estados: solo se revisan registros que están en
    * `SUBMITTED`; de ahí pasan a `APPROVED` o `REJECTED`.
    */
   async review(id: number, status: HourLogStatus, reviewerId: number, note?: string) {
-    const log = await this.prisma.hourLog.findUnique({ where: { id } })
+    const log = await this.prisma.hourLog.findUnique({
+      where: { id },
+      include: { placement: true },
+    })
     if (!log) throw new NotFoundException('registro de horas no encontrado')
+    if (log.placement.tutorId !== reviewerId) {
+      throw new ForbiddenException('solo el tutor asignado a la práctica puede revisar sus horas')
+    }
     if (log.status !== HourLogStatus.SUBMITTED) {
       throw new BadRequestException('solo se revisan registros en SUBMITTED')
     }
