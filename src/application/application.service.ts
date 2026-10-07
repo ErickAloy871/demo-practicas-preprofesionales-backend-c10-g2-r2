@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { ApplicationStatus } from '@prisma/client'
+import { ApplicationStatus, Role } from '@prisma/client'
+import { assertOfferScope } from '../common/ownership'
 import { OfferService } from '../offer/offer.service'
 import { PrismaService } from '../prisma/prisma.service'
 
@@ -27,7 +28,10 @@ export class ApplicationService {
   }
 
   // D-04: N+1. Una consulta por la lista y otra por cada estudiante.
-  async listByOffer(offerId: number) {
+  /** E3-01 (hallazgo 2): solo la empresa dueña de la oferta (o la coordinación) ve sus postulantes. */
+  async listByOffer(offerId: number, userId: number, role: Role) {
+    await assertOfferScope(this.prisma, offerId, userId, role, 'la oferta no es de tu empresa')
+
     const applications = await this.prisma.application.findMany({ where: { offerId } })
     const rows = []
     for (const application of applications) {
@@ -40,9 +44,17 @@ export class ApplicationService {
     return rows
   }
 
-  async decide(id: number, status: ApplicationStatus) {
+  /** E3-01 (hallazgo 3): solo la empresa dueña de la oferta decide sobre sus postulaciones. */
+  async decide(id: number, status: ApplicationStatus, userId: number, role: Role) {
     const application = await this.prisma.application.findUnique({ where: { id } })
     if (!application) throw new NotFoundException('postulación no encontrada')
+    await assertOfferScope(
+      this.prisma,
+      application.offerId,
+      userId,
+      role,
+      'la postulación no pertenece a una oferta de tu empresa',
+    )
     if (application.status !== ApplicationStatus.SUBMITTED && application.status !== ApplicationStatus.INTERVIEW) {
       throw new BadRequestException('la postulación ya fue decidida')
     }

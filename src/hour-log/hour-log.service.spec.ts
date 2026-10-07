@@ -55,7 +55,7 @@ describe('HourLogService', () => {
     expect(result.reviewedById).toBe(7)
   })
 
-  it('rejects with 403 when the tutor is not assigned to the practice (E3-01)', async () => {
+  it('rejects with 403 the tutor that is not assigned, on approval and on rejection (E3-01)', async () => {
     // El hour-log 99 vive en el placement del tutor 7; el tutor 8 no lo tutoriza.
     prisma.hourLog.findUnique.mockResolvedValue({
       id: 99,
@@ -69,18 +69,6 @@ describe('HourLogService', () => {
 
     expect(error).toBeInstanceOf(ForbiddenException)
     expect((error as ForbiddenException).getStatus()).toBe(403)
-    expect(prisma.hourLog.update).not.toHaveBeenCalled()
-  })
-
-  it('blocks the foreign tutor on rejection too, not only on approval (E3-01)', async () => {
-    prisma.hourLog.findUnique.mockResolvedValue({
-      id: 99,
-      placementId: 1,
-      status: 'SUBMITTED',
-      version: 1,
-      placement: { tutorId: 7 },
-    })
-
     await expect(service.review(99, 'REJECTED' as never, 8, 'no corresponde')).rejects.toMatchObject({ status: 403 })
     expect(prisma.hourLog.update).not.toHaveBeenCalled()
   })
