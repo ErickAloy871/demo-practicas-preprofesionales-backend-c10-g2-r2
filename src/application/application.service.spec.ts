@@ -84,4 +84,16 @@ describe('ApplicationService', () => {
     await expect(service.listByOffer(1, OWNER, Role.COMPANY)).rejects.toMatchObject({ status: 403 })
     expect(prisma.application.findMany).not.toHaveBeenCalled()
   })
+
+  it('lets the coordination list applications of any company', async () => {
+    prisma.offer.findUnique.mockResolvedValue({ id: 1, companyId: FOREIGN_COMPANY_ID })
+    prisma.application.findMany.mockResolvedValue([{ id: 1, studentId: 10, status: 'SUBMITTED' }])
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ companyId: FOREIGN_COMPANY_ID }) 
+      .mockResolvedValueOnce({ id: 10, fullName: 'Estudiante 10' })
+
+    const result = await service.listByOffer(1, 1, Role.COORDINATOR)
+
+    expect(result).toHaveLength(1)
+  })
 })
