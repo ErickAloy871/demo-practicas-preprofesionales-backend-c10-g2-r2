@@ -5,14 +5,16 @@ import { AuthService } from './auth.service'
 import { JwtAuthGuard } from './guards/jwt-auth.guard'
 import { RolesGuard } from './guards/roles.guard'
 
-@Global()
+const jwtSecret = process.env.JWT_SECRET
+if (!jwtSecret) {
+  throw new Error('FALTA VARIABLE DE ENTORNO: JWT_SECRET es requerida para firmar los tokens de sesión. Genera una y colócala en tu archivo .env (mira el README).')
+}
+
 @Module({
   imports: [
     JwtModule.register({
       global: true,
-      // D-07: fallback hardcodeado si falta la env. Documentado en KNOWN_ISSUES.md.
-      secret: process.env.JWT_SECRET ?? 'dev-secret-no-cambiar',
-      signOptions: { expiresIn: (process.env.JWT_EXPIRES_IN ?? '15m') as any },
+      secret: jwtSecret,
     }),
   ],
   controllers: [AuthController],
