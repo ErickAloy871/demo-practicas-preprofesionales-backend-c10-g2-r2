@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException } from '@nestjs/common'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { HourLogService } from './hour-log.service'
 
@@ -39,13 +39,53 @@ describe('HourLogService', () => {
     ).rejects.toThrow(BadRequestException)
   })
 
-  it('approves a submitted hour log', async () => {
-    prisma.hourLog.findUnique.mockResolvedValue({ id: 99, placementId: 1, status: 'SUBMITTED', version: 1 })
+  it('approves a submitted hour log when the caller is the assigned tutor', async () => {
+    prisma.hourLog.findUnique.mockResolvedValue({
+      id: 99,
+      placementId: 1,
+      status: 'SUBMITTED',
+      version: 1,
+      placement: { tutorId: 7 },
+    })
     prisma.hourLog.update.mockImplementation(({ data }) => Promise.resolve({ id: 99, ...data }))
 
     const result = await service.review(99, 'APPROVED' as never, 7, 'ok')
 
     expect(result.status).toBe('APPROVED')
     expect(result.reviewedById).toBe(7)
+  })
+
+  it('rejects with 403 the tutor that is not assigned, on approval and on rejection (E3-01)', async () => {
+    // El hour-log 99 vive en el placement del tutor 7; el tutor 8 no lo tutoriza.
+    prisma.hourLog.findUnique.mockResolvedValue({
+      id: 99,
+      placementId: 1,
+      status: 'SUBMITTED',
+      version: 1,
+      placement: { tutorId: 7 },
+    })
+
+    const error = await service.review(99, 'APPROVED' as never, 8, undefined).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ForbiddenException)
+    expect((error as ForbiddenException).getStatus()).toBe(403)
+    await expect(service.review(99, 'REJECTED' as never, 8, 'no corresponde')).rejects.toMatchObject({ status: 403 })
+    expect(prisma.hourLog.update).not.toHaveBeenCalled()
+  })
+
+  it('lets the assigned tutor reject a submitted hour log', async () => {
+    prisma.hourLog.findUnique.mockResolvedValue({
+      id: 99,
+      placementId: 1,
+      status: 'SUBMITTED',
+      version: 1,
+      placement: { tutorId: 7 },
+    })
+    prisma.hourLog.update.mockImplementation(({ data }) => Promise.resolve({ id: 99, ...data }))
+
+    const result = await service.review(99, 'REJECTED' as never, 7, 'faltó detalle de la actividad')
+
+    expect(result.status).toBe('REJECTED')
+    expect(result.reviewNote).toBe('faltó detalle de la actividad')
   })
 })
