@@ -6,7 +6,10 @@ import { AuthService } from './auth.service'
 // Smell deliberado: mockeamos PrismaService completo, así que estos tests
 // no ejercitan SQL real y no detectan N+1 ni races.
 const prisma = { user: { findUnique: vi.fn() } }
-const jwt = { signAsync: vi.fn().mockResolvedValue('token-firmado') }
+const jwt = { 
+  signAsync: vi.fn().mockResolvedValue('token-firmado'),
+  verifyAsync: vi.fn().mockResolvedValue({ sub: 1, email: 'tutor0@miyura.com', role: 'TUTOR' })
+}
 
 describe('AuthService.login', () => {
   let service: AuthService
@@ -48,5 +51,41 @@ describe('AuthService.login', () => {
     })
 
     await expect(service.login('tutor0@miyura.com', 'yura1234')).rejects.toThrow(UnauthorizedException)
+  })
+})
+
+describe('AuthService.refresh', () => {
+  let service: AuthService
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    service = new AuthService(prisma as never, jwt as never)
+  })
+
+  it('renews the session and invalidates the previous token', async () => {
+    jwt.verifyAsync.mockResolvedValue({ sub: 1, email: 'tutor0@miyura.com', role: 'TUTOR' })
+    prisma.user.findUnique.mockResolvedValue({
+      id: 1, email: 'tutor0@miyura.com', role: 'TUTOR',
+    })
+
+    const oldToken = 'old-token'
+    const result = await service.refresh(oldToken)
+
+    expect(result.accessToken).toBe('token-firmado')
+    expect(jwt.verifyAsync).toHaveBeenCalledWith(oldToken, { ignoreExpiration: true })
+    expect(service.isTokenInvalidated(oldToken)).toBe(true)
+  })
+
+  it('throws Unauthorized when trying to renew an already invalidated token', async () => {
+    const token = 'already-invalidated-token'
+    service.logout(token)
+
+    await expect(service.refresh(token)).rejects.toThrow(UnauthorizedException)
+    await expect(service.refresh(token)).rejects.toThrow('token ya fue invalidado')
+  })
+
+  it('throws Unauthorized if the token is invalid (not just expired)', async () => {
+    jwt.verifyAsync.mockRejectedValue(new Error('Invalid token'))
+    await expect(service.refresh('invalid-token')).rejects.toThrow(UnauthorizedException)
   })
 })
