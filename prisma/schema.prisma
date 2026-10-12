@@ -79,8 +79,24 @@ model User {
   reviewedHourLogs  HourLog[]     @relation("HourLogReviewer")
   uploadedDocuments  Document[]   @relation("DocUploader")
   validatedDocuments Document[]   @relation("DocValidator")
+  authSessions       AuthSession[]
 
   @@map("users")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid())
+  userId           Int
+  refreshTokenHash String    @unique
+  tokenVersion     Int       @default(0)
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@map("auth_sessions")
 }
 
 model Company {
