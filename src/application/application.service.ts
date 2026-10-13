@@ -27,21 +27,17 @@ export class ApplicationService {
     })
   }
 
-  // D-04: N+1. Una consulta por la lista y otra por cada estudiante.
   /** E3-01 (hallazgo 2): solo la empresa dueña de la oferta (o la coordinación) ve sus postulantes. */
   async listByOffer(offerId: number, userId: number, role: Role) {
     await assertOfferScope(this.prisma, offerId, userId, role, 'la oferta no es de tu empresa')
 
-    const applications = await this.prisma.application.findMany({ where: { offerId } })
-    const rows = []
-    for (const application of applications) {
-      const student = await this.prisma.user.findUnique({
-        where: { id: application.studentId },
-        select: { id: true, email: true, fullName: true },
-      })
-      rows.push({ ...application, student })
-    }
-    return rows
+    // G2-20 (D-04): una sola consulta con el estudiante incluido, en vez de un
+    // findUnique por postulación — antes eran 201 consultas con 200 filas.
+    const applications = await this.prisma.application.findMany({
+      where: { offerId },
+      include: { student: { select: { id: true, email: true, fullName: true } } },
+    })
+    return applications
   }
 
   /** E3-01 (hallazgo 3): solo la empresa dueña de la oferta decide sobre sus postulaciones. */
