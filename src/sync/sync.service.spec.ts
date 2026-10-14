@@ -78,6 +78,17 @@ describe('SyncService', () => {
     expect(prisma.client.$transaction).toHaveBeenCalled()
   })
 
+  it('rejects a synced activity when the daily total would exceed eight hours', async () => {
+    prisma.state.dailyHours = 7.5
+
+    const result = await service.push(5, [makeCreateOp('12111111-1111-4111-8111-111111111111')])
+
+    expect(result.results[0]).toMatchObject({
+      status: 'rejected',
+      reason: 'No puedes registrar más de 8 horas en un mismo día',
+    })
+  })
+
   // Criterio de aceptación: reintento secuencial con el mismo clientOpId
   // deja una sola fila en HourLog y devuelve el mismo `server.id`.
   it('is idempotent on sequential retries with the same clientOpId', async () => {

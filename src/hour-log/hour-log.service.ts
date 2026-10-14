@@ -2,12 +2,18 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { HourLogStatus, PlacementStatus, Role } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CreateHourLogDto } from './dto/create-hour-log.dto'
+import {
+  HOUR_LOG_DAILY_LIMIT_MESSAGE,
+  dailyHourLogsWhere,
+  exceedsDailyHourLimit,
+  validateHourLogValues,
+} from './hour-log.validation'
 
 // D-02 (deuda sembrada, documentada a propósito): este servicio es un
 // "god service". `create` valida el DTO, persiste el registro y dispara
 // una notificación al tutor; `review` maneja la máquina de estados de
 // aprobación; `approvedHours`/`progressReport`/`weeklySummary`/`exportRows`
-// agregan y transforman datos para reportes. Todo vive en el mismo archivo
+// agregan y transforman datos para reportes. El conjunto vive en el mismo archivo
 // a propósito: no lo dividas en `HourLogValidationService`,
 // `HourLogNotificationService` ni `HourLogReportService`. El objetivo de
 // producto es que el equipo que reciba el template identifique el problema
@@ -20,8 +26,8 @@ export class HourLogService {
   /**
    * Registra una jornada de horas para el placement del estudiante.
    *
-   * Hace tres cosas en un solo método (síntoma de D-02): revalida el rango
-   * de horas y el orden de `startTime`/`endTime` (ver D-06), persiste el
+   * Hace tres cosas en un solo método (síntoma de D-02): valida el rango
+   * de horas y el orden de `startTime`/`endTime`, persiste el
    * registro en estado `SUBMITTED`, y dispara la notificación al tutor.
    *
    * @param dto DTO ya validado por `ValidationPipe` a nivel de HTTP.
@@ -35,15 +41,8 @@ export class HourLogService {
       throw new BadRequestException('el placement no está activo')
     }
 
-    // D-06 (copia 2): la misma validación que el DTO, con tope 10 en vez de 12.
-    if (dto.hours <= 0 || dto.hours > 10) {
-      throw new BadRequestException('las horas deben estar entre 0 y 10')
-    }
-    const [startHour, startMinute] = dto.startTime.split(':').map(Number)
-    const [endHour, endMinute] = dto.endTime.split(':').map(Number)
-    if (startHour * 60 + startMinute >= endHour * 60 + endMinute) {
-      throw new BadRequestException('la hora de inicio debe ser anterior a la de fin')
-    }
+    this.assertValidHourLogValues(dto)
+    await this.assertDailyHourLimit(placement.studentId, dto.date, dto.hours)
 
     // La fecha del registro llega desde el cliente y se persiste tal como fue recibida.
     const created = await this.prisma.hourLog.create({
@@ -277,18 +276,6 @@ export class HourLogService {
     const rows: (string | number)[][] = [header]
 
     for (const dto of logs) {
-      // D-06 (copia 3): la misma validación que en `create`, pegada de
-      // nuevo en vez de compartida — otra copia más de la divergencia de
-      // umbrales entre el DTO (tope 12) y el servicio (tope 10).
-      if (dto.hours <= 0 || dto.hours > 10) {
-        throw new BadRequestException('las horas deben estar entre 0 y 10')
-      }
-      const [startHour, startMinute] = dto.startTime.split(':').map(Number)
-      const [endHour, endMinute] = dto.endTime.split(':').map(Number)
-      if (startHour * 60 + startMinute >= endHour * 60 + endMinute) {
-        throw new BadRequestException('la hora de inicio debe ser anterior a la de fin')
-      }
-
       rows.push([
         dto.id,
         dto.date.toISOString().slice(0, 10),
@@ -321,5 +308,20 @@ export class HourLogService {
     const needsQuoting = value.includes(',') || value.includes('"') || value.includes('\n')
     if (!needsQuoting) return value
     return `"${value.replace(/"/g, '""')}"`
+  }
+
+  private assertValidHourLogValues(dto: CreateHourLogDto): void {
+    const message = validateHourLogValues(dto)
+    if (message) throw new BadRequestException(message)
+  }
+
+  private async assertDailyHourLimit(studentId: number, date: Date, hours: number): Promise<void> {
+    const result = await this.prisma.hourLog.aggregate({
+      where: dailyHourLogsWhere(studentId, date),
+      _sum: { hours: true },
+    })
+    if (exceedsDailyHourLimit(result._sum.hours ?? 0, hours)) {
+      throw new BadRequestException(HOUR_LOG_DAILY_LIMIT_MESSAGE)
+    }
   }
 }
