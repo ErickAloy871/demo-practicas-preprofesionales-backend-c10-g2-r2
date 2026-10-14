@@ -5,10 +5,9 @@ import { ApplicationService } from './application.service'
 
 const prisma = {
   application: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
-  offer: { findUnique: vi.fn() },
+  offer: { findUnique: vi.fn(), updateMany: vi.fn() },
   user: { findUnique: vi.fn() },
 }
-const offers = { acceptedCount: vi.fn() }
 
 const COMPANY_ID = 7
 const OWNER = 42
@@ -20,27 +19,35 @@ describe('ApplicationService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     prisma.user.findUnique.mockResolvedValue({ companyId: COMPANY_ID })
-    service = new ApplicationService(prisma as never, offers as never)
+    service = new ApplicationService(prisma as never)
   })
 
   it('accepts an application when there are seats left', async () => {
     prisma.application.findUnique.mockResolvedValue({ id: 7, offerId: 1, studentId: 10, status: 'SUBMITTED' })
     prisma.offer.findUnique.mockResolvedValue({ id: 1, seats: 3, status: 'PUBLISHED', companyId: COMPANY_ID })
-    offers.acceptedCount.mockResolvedValue(2)
+    prisma.offer.updateMany.mockResolvedValue({ count: 1 })
     prisma.application.update.mockImplementation(({ data }) => Promise.resolve({ id: 7, ...data }))
 
     const result = await service.decide(7, 'ACCEPTED' as never, OWNER, Role.COMPANY)
 
     expect(result.status).toBe('ACCEPTED')
     expect(result.decidedAt).toBeInstanceOf(Date)
+    expect(prisma.offer.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, acceptedCount: { lt: 3 } },
+      data: { acceptedCount: { increment: 1 } },
+    })
   })
 
+  // G2-19: cuando el UPDATE condicional no afecta ninguna fila (claimed.count
+  // === 0), significa que otra aceptación ya ocupó el cupo — la oferta
+  // llenándose a mitad de la operación se ve igual que llenándose antes.
   it('rejects accepting when the offer is already full', async () => {
     prisma.application.findUnique.mockResolvedValue({ id: 7, offerId: 1, studentId: 10, status: 'SUBMITTED' })
     prisma.offer.findUnique.mockResolvedValue({ id: 1, seats: 3, status: 'PUBLISHED', companyId: COMPANY_ID })
-    offers.acceptedCount.mockResolvedValue(3)
+    prisma.offer.updateMany.mockResolvedValue({ count: 0 })
 
     await expect(service.decide(7, 'ACCEPTED' as never, OWNER, Role.COMPANY)).rejects.toThrow(BadRequestException)
+    expect(prisma.application.update).not.toHaveBeenCalled()
   })
 
   it('rejects with 403 deciding an application of another company (E3-01)', async () => {
