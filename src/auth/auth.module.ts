@@ -7,9 +7,6 @@ import { RolesGuard } from './guards/roles.guard'
 import { ACCESS_TOKEN_TTL_SECONDS } from './auth.config'
 
 const jwtSecret = process.env.JWT_SECRET
-if (!jwtSecret) throw new Error('JWT_SECRET debe estar configurado')
-
-const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret) {
   throw new Error('FALTA VARIABLE DE ENTORNO: JWT_SECRET es requerida para firmar los tokens de sesión. Genera una y colócala en tu archivo .env (mira el README).')
 }
