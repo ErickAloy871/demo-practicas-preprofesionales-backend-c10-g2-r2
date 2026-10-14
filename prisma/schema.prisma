@@ -204,6 +204,9 @@ model HourLog {
   placement  Placement @relation(fields: [placementId], references: [id])
   reviewedBy User?     @relation("HourLogReviewer", fields: [reviewedById], references: [id])
 
+  // G2-21: el libro de horas filtra por placement y ordena por fecha
+  // (listForPlacement); sin este índice la consulta recorre la tabla entera.
+  @@index([placementId, date])
   @@index([updatedAt, id])
   @@map("hour_logs")
 }
