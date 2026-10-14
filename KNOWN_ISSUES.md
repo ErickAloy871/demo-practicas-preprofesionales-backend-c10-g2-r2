@@ -56,10 +56,3 @@ del frontend.
 Y ya divergieron: el DTO acepta hasta 12 horas por registro y el servicio corta en 10. El
 formulario tiene su propia versión. Nadie recuerda cuál es la correcta.
 
-## D-07 · `JWT_SECRET` tiene un fallback hardcodeado
-
-`src/auth/auth.module.ts`
-
-Si la variable de entorno no está, el módulo arranca igual con un secreto por defecto que
-está en el código. Lo pusimos para no pelear con el entorno local y se quedó. En producción
-esto no puede quedar así.
