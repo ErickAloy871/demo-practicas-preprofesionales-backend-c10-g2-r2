@@ -59,10 +59,3 @@ plazas, pero la suma de sus registros no eliminados para una misma fecha no pued
 8 h. El límite, su mensaje y la regla están centralizados en
 `src/hour-log/hour-log.validation.ts`; el flujo HTTP y el de sincronización lo usan.
 
-## D-07 · `JWT_SECRET` tiene un fallback hardcodeado
-
-`src/auth/auth.module.ts`
-
-Si la variable de entorno no está, el módulo arranca igual con un secreto por defecto que
-está en el código. Lo pusimos para no pelear con el entorno local y se quedó. En producción
-esto no puede quedar así.
