@@ -2,6 +2,12 @@ import { Injectable, Logger } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { normalizeHourLogDate } from '../common/date-normalization'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  HOUR_LOG_DAILY_LIMIT_MESSAGE,
+  dailyHourLogsWhere,
+  exceedsDailyHourLimit,
+  validateHourLogValues,
+} from '../hour-log/hour-log.validation'
 import { type Checkpoint, decodeCheckpoint, encodeCheckpoint } from './checkpoint'
 import type { SyncOperationInput, SyncOperationResult } from './dto/push.dto'
 
@@ -160,10 +166,17 @@ export class SyncService {
       return rejectOp(op.clientOpId, 'el placement no pertenece al usuario')
     }
 
+    const data = extractHourLogData(op.payload)
+    const message = validateHourLogValues(data)
+    if (message) return rejectOp(op.clientOpId, message)
+    if (await this.exceedsDailyHourLimit(tx, userId, data.date, data.hours)) {
+      return rejectOp(op.clientOpId, HOUR_LOG_DAILY_LIMIT_MESSAGE)
+    }
+
     const created = await tx.hourLog.create({
       data: {
         placementId: Number(op.payload.placementId),
-        ...extractHourLogData(op.payload),
+        ...data,
         status: 'SUBMITTED',
       },
     })
@@ -189,10 +202,17 @@ export class SyncService {
         return rejectOp(op.clientOpId, 'el tutor ya revisó esta hora; tu edición no se aplicó')
       }
 
+      const data = extractHourLogData(op.payload)
+      const message = validateHourLogValues(data)
+      if (message) return rejectOp(op.clientOpId, message)
+      if (await this.exceedsDailyHourLimit(tx, userId, data.date, data.hours, existing.id)) {
+        return rejectOp(op.clientOpId, HOUR_LOG_DAILY_LIMIT_MESSAGE)
+      }
+
       const updated = await tx.hourLog.update({
         where: { id: Number(op.payload.id) },
         data: {
-          ...extractHourLogData(op.payload),
+          ...data,
           version: { increment: 1 },
         },
       })
@@ -204,6 +224,20 @@ export class SyncService {
       data: { deletedAt: new Date(), version: { increment: 1 } },
     })
     return applyOp(op.clientOpId, deleted)
+  }
+
+  private async exceedsDailyHourLimit(
+    tx: Prisma.TransactionClient,
+    studentId: number,
+    date: Date,
+    hours: number,
+    excludingHourLogId?: number,
+  ): Promise<boolean> {
+    const result = await tx.hourLog.aggregate({
+      where: dailyHourLogsWhere(studentId, date, excludingHourLogId),
+      _sum: { hours: true },
+    })
+    return exceedsDailyHourLimit(result._sum.hours ?? 0, hours)
   }
 }
 
