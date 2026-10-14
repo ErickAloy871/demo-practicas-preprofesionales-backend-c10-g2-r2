@@ -1,15 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { ApplicationStatus, Role } from '@prisma/client'
 import { assertOfferScope } from '../common/ownership'
-import { OfferService } from '../offer/offer.service'
 import { PrismaService } from '../prisma/prisma.service'
 
 @Injectable()
 export class ApplicationService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly offers: OfferService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   apply(offerId: number, studentId: number, motivation: string) {
     return this.prisma.application.create({
@@ -44,7 +40,7 @@ export class ApplicationService {
   async decide(id: number, status: ApplicationStatus, userId: number, role: Role) {
     const application = await this.prisma.application.findUnique({ where: { id } })
     if (!application) throw new NotFoundException('postulación no encontrada')
-    await assertOfferScope(
+    const offer = await assertOfferScope(
       this.prisma,
       application.offerId,
       userId,
@@ -56,11 +52,16 @@ export class ApplicationService {
     }
 
     if (status === ApplicationStatus.ACCEPTED) {
-      const offer = await this.prisma.offer.findUnique({ where: { id: application.offerId } })
-      if (!offer) throw new NotFoundException('oferta no encontrada')
-      // Verifica que la oferta todavía tenga cupos antes de aceptar la postulación.
-      const accepted = await this.offers.acceptedCount(application.offerId)
-      if (accepted >= offer.seats) throw new BadRequestException('la oferta ya no tiene cupos')
+      // G2-19: UPDATE condicional atómico sobre la propia fila de la oferta.
+      // Entre leer cuántas aceptadas hay y escribir la aceptación no debe
+      // quedar ninguna ventana: dos aceptaciones a la vez solo pueden mover
+      // este contador una vez cada una, nunca por encima de seats. La fila
+      // que no logra incrementarlo (claimed.count === 0) perdió la carrera.
+      const claimed = await this.prisma.offer.updateMany({
+        where: { id: offer.id, acceptedCount: { lt: offer.seats } },
+        data: { acceptedCount: { increment: 1 } },
+      })
+      if (claimed.count === 0) throw new BadRequestException('la oferta ya no tiene cupos')
     }
 
     return this.prisma.application.update({
