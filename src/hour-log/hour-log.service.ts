@@ -9,30 +9,39 @@ import {
   exceedsDailyHourLimit,
   validateHourLogValues,
 } from './hour-log.validation'
+import { HourLogNotificationService } from './hour-log.notification.service'
+import { HourLogReportService } from './hour-log.report.service'
+import { HourLogValidationService } from './hour-log.validation.service'
 
-// D-02 (deuda sembrada, documentada a propósito): este servicio es un
-// "god service". `create` valida el DTO, persiste el registro y dispara
-// una notificación al tutor; `review` maneja la máquina de estados de
-// aprobación; `approvedHours`/`progressReport`/`weeklySummary`/`exportRows`
-// agregan y transforman datos para reportes. La lógica vive en el mismo archivo
-// a propósito: no lo dividas en `HourLogValidationService`,
-// `HourLogNotificationService` ni `HourLogReportService`. El objetivo de
-// producto es que el equipo que reciba el template identifique el problema
-// de mantenibilidad y decida cómo (y cuándo) separarlo — no que nazca ya
-// separado.
+/**
+ * Orquestador del módulo de libro de horas.
+ *
+ * Responsabilidad única: coordinar el flujo de creación y revisión de
+ * jornadas. Delega validación, notificación y reportes a servicios
+ * especializados. No contiene lógica de negocio propia más allá de
+ * gestionar el placement y la máquina de estados de aprobación.
+ */
 @Injectable()
 export class HourLogService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly validation: HourLogValidationService
+  private readonly notification: HourLogNotificationService
+  private readonly report: HourLogReportService
+
+  constructor(
+    private readonly prisma: PrismaService,
+    validation?: HourLogValidationService,
+    notification?: HourLogNotificationService,
+    report?: HourLogReportService,
+  ) {
+    this.validation = validation ?? new HourLogValidationService()
+    this.notification = notification ?? new HourLogNotificationService()
+    this.report = report ?? new HourLogReportService(prisma, this.validation)
+  }
 
   /**
    * Registra una jornada de horas para el placement del estudiante.
-   *
-   * Hace tres cosas en un solo método (síntoma de D-02): valida el rango
-   * de horas y el orden de `startTime`/`endTime`, persiste el
-   * registro en estado `SUBMITTED`, y dispara la notificación al tutor.
-   *
-   * @param dto DTO ya validado por `ValidationPipe` a nivel de HTTP.
-   * @param studentId id del usuario autenticado que registra la jornada.
+   * Valida el placement, delega la validación de rangos y dispara la
+   * notificación al tutor.
    */
   async create(dto: CreateHourLogDto, studentId: number) {
     const placement = await this.prisma.placement.findUnique({ where: { id: dto.placementId } })
@@ -61,13 +70,8 @@ export class HourLogService {
       },
     })
 
-    this.notifyTutor(placement.tutorId, created.id)
+    this.notification.notifyTutor(placement.tutorId, created.id)
     return created
-  }
-
-  // D-02: notificación dentro del mismo servicio que persiste y valida.
-  private notifyTutor(tutorId: number, hourLogId: number): void {
-    console.log(`[notificación] tutor ${tutorId}: nueva hora registrada #${hourLogId}`)
   }
 
   /**
@@ -77,7 +81,8 @@ export class HourLogService {
   async assertPlacementAccess(placementId: number, userId: number, role: Role): Promise<void> {
     const placement = await this.prisma.placement.findUnique({ where: { id: placementId } })
     if (!placement) throw new NotFoundException('placement no encontrado')
-    const allowed = role === Role.COORDINATOR || placement.studentId === userId || placement.tutorId === userId
+    const allowed =
+      role === Role.COORDINATOR || placement.studentId === userId || placement.tutorId === userId
     if (!allowed) throw new ForbiddenException('no tienes acceso a este placement')
   }
 
@@ -92,15 +97,8 @@ export class HourLogService {
   /**
    * Aprueba o rechaza un registro de horas.
    *
-   * E3-01 (hallazgo 1): el rol `TUTOR` no basta. Solo el tutor **asignado** a la
-   * práctica puede revisar sus horas; antes bastaba con ser tutor de cualquier
-   * práctica para aprobar o rechazar las ajenas (`HTTP 200`), lo que dejaba el
-   * acta de acreditación sin respaldo. El endpoint sigue siendo
-   * `@Roles(Role.TUTOR)` como antes, así que la coordinación no gana ni pierde
-   * permisos aquí.
-   *
-   * Valida además la máquina de estados: solo se revisan registros que están en
-   * `SUBMITTED`; de ahí pasan a `APPROVED` o `REJECTED`.
+   * Solo el tutor asignado al placement puede revisar sus horas (E3-01).
+   * Solo se pueden revisar registros en estado SUBMITTED.
    */
   async review(id: number, status: HourLogStatus, reviewerId: number, note?: string) {
     const log = await this.prisma.hourLog.findUnique({
@@ -116,202 +114,26 @@ export class HourLogService {
     }
     return this.prisma.hourLog.update({
       where: { id },
-      data: {
-        status,
-        reviewedById: reviewerId,
-        reviewedAt: new Date(),
-        reviewNote: note,
-        version: { increment: 1 },
-      },
+      data: { status, reviewedById: reviewerId, reviewedAt: new Date(), reviewNote: note, version: { increment: 1 } },
     })
   }
 
-  /**
-   * Suma las horas ya `APPROVED` de un placement.
-   *
-   * D-02: agregación de reporte en el mismo servicio que valida, persiste
-   * y notifica.
-   */
-  async approvedHours(placementId: number): Promise<number> {
-    const result = await this.prisma.hourLog.aggregate({
-      where: { placementId, status: HourLogStatus.APPROVED, deletedAt: null },
-      _sum: { hours: true },
-    })
-    return result._sum.hours ?? 0
+  // ── Delegación a HourLogReportService ────────────────────────────────────
+
+  approvedHours(placementId: number) {
+    return this.report.approvedHours(placementId)
   }
 
-  /**
-   * Reporte de avance de un placement: horas requeridas, horas aprobadas,
-   * registros pendientes de revisión, y porcentaje de avance.
-   */
-  async progressReport(placementId: number) {
-    const placement = await this.prisma.placement.findUnique({ where: { id: placementId } })
-    if (!placement) throw new NotFoundException('placement no encontrado')
-    const approved = await this.approvedHours(placementId)
-    const pending = await this.prisma.hourLog.count({
-      where: { placementId, status: HourLogStatus.SUBMITTED, deletedAt: null },
-    })
-    return {
-      placementId,
-      requiredHours: placement.requiredHours,
-      approvedHours: approved,
-      pendingLogs: pending,
-      percentage: Math.round((approved / placement.requiredHours) * 100),
-    }
+  progressReport(placementId: number) {
+    return this.report.progressReport(placementId)
   }
 
-  // D-02: otra agregación de reporte más, en el mismo servicio que valida,
-  // persiste y notifica. Debería vivir en un `HourLogReportService`, pero
-  // el punto de la deuda es que nadie lo separó todavía.
-  async weeklySummary(placementId: number): Promise<
-    {
-      week: string
-      approvedHours: number
-      submittedHours: number
-      logsCount: number
-      expectedHoursPercentage: number
-    }[]
-  > {
-    const placement = await this.prisma.placement.findUnique({ where: { id: placementId } })
-    if (!placement) throw new NotFoundException('placement no encontrado')
-
-    const logs = await this.prisma.hourLog.findMany({
-      where: { placementId, deletedAt: null },
-      orderBy: { date: 'asc' },
-    })
-
-    // Reparto ingenuo de `requiredHours` entre las semanas del placement,
-    // para poder comparar el avance semana a semana contra "lo esperado".
-    // No es un cálculo de negocio serio (no contempla feriados, licencias,
-    // etc.) — es exactamente el tipo de atajo que un `HourLogReportService`
-    // dedicado habría cuestionado en revisión de diseño.
-    const totalDays = Math.max(
-      1,
-      Math.ceil((placement.endDate.getTime() - placement.startDate.getTime()) / 86400000),
-    )
-    const totalWeeks = Math.max(1, Math.ceil(totalDays / 7))
-    const expectedHoursPerWeek = placement.requiredHours / totalWeeks
-
-    // No usamos ninguna librería de fechas para agrupar por semana ISO:
-    // se calcula a mano, lo que suma más complejidad ciclomática al
-    // servicio en vez de delegarla a un util compartido.
-    const buckets = new Map<string, { approvedHours: number; submittedHours: number; logsCount: number }>()
-
-    for (const log of logs) {
-      // Solo contamos horas que ya pasaron por algún tipo de revisión o
-      // que están esperando revisión; los DRAFT no entran al resumen.
-      if (log.status !== HourLogStatus.APPROVED && log.status !== HourLogStatus.SUBMITTED) {
-        continue
-      }
-
-      const week = this.isoWeekLabel(log.date)
-      const bucket = buckets.get(week) ?? { approvedHours: 0, submittedHours: 0, logsCount: 0 }
-
-      if (log.status === HourLogStatus.APPROVED) {
-        bucket.approvedHours += log.hours
-      } else {
-        bucket.submittedHours += log.hours
-      }
-      bucket.logsCount += 1
-
-      buckets.set(week, bucket)
-    }
-
-    const summary: {
-      week: string
-      approvedHours: number
-      submittedHours: number
-      logsCount: number
-      expectedHoursPercentage: number
-    }[] = []
-
-    for (const [week, bucket] of buckets.entries()) {
-      const expectedHoursPercentage =
-        expectedHoursPerWeek > 0 ? Math.round((bucket.approvedHours / expectedHoursPerWeek) * 100) : 0
-
-      summary.push({
-        week,
-        approvedHours: bucket.approvedHours,
-        submittedHours: bucket.submittedHours,
-        logsCount: bucket.logsCount,
-        expectedHoursPercentage,
-      })
-    }
-
-    // Orden cronológico. Como `week` tiene formato `AAAA-Wnn`, el orden
-    // lexicográfico coincide con el orden cronológico dentro del mismo año.
-    summary.sort((a, b) => {
-      if (a.week < b.week) return -1
-      if (a.week > b.week) return 1
-      return 0
-    })
-
-    return summary
+  weeklySummary(placementId: number) {
+    return this.report.weeklySummary(placementId)
   }
 
-  // D-02: cálculo manual de semana ISO 8601. Otra pieza de lógica que
-  // debería vivir en un helper de fechas compartido y en cambio vive aquí,
-  // pegada al resto de responsabilidades del servicio.
-  private isoWeekLabel(date: Date): string {
-    // Copiamos la fecha a UTC para no arrastrar el timezone del proceso.
-    const copy = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
-
-    // Lunes = 1 ... domingo = 7, para poder mover la fecha al jueves de
-    // la misma semana ISO (regla estándar de cálculo de semana ISO 8601).
-    const isoDayNumber = copy.getUTCDay() === 0 ? 7 : copy.getUTCDay()
-    copy.setUTCDate(copy.getUTCDate() + 4 - isoDayNumber)
-
-    const yearStart = new Date(Date.UTC(copy.getUTCFullYear(), 0, 1))
-    const daysSinceYearStart = (copy.getTime() - yearStart.getTime()) / 86400000
-    const weekNumber = Math.ceil((daysSinceYearStart + 1) / 7)
-
-    return `${copy.getUTCFullYear()}-W${String(weekNumber).padStart(2, '0')}`
-  }
-
-  // D-02: exporta el libro de horas a filas de CSV, en el mismo servicio
-  // que valida y persiste. Debería vivir en un `HourLogExportService`.
-  async exportRows(placementId: number): Promise<(string | number)[][]> {
-    const logs = await this.prisma.hourLog.findMany({
-      where: { placementId, deletedAt: null },
-      orderBy: { date: 'asc' },
-    })
-
-    const header = ['id', 'fecha', 'inicio', 'fin', 'horas', 'actividad', 'estado', 'revisadoPor']
-    const rows: (string | number)[][] = [header]
-
-    for (const dto of logs) {
-      rows.push([
-        dto.id,
-        dto.date.toISOString().slice(0, 10),
-        dto.startTime,
-        dto.endTime,
-        dto.hours,
-        this.escapeCsvField(dto.activity),
-        dto.status,
-        dto.reviewedById ?? '',
-      ])
-    }
-
-    // Fila de totales al final del CSV. Se recorren las filas ya
-    // construidas en vez de reutilizar `approvedHours` — otra oportunidad
-    // perdida de reusar código en vez de recalcular a mano.
-    let totalHours = 0
-    for (const row of rows.slice(1)) {
-      const hoursCell = row[4]
-      if (typeof hoursCell === 'number') totalHours += hoursCell
-    }
-    rows.push(['', '', '', '', totalHours, 'TOTAL', '', ''])
-
-    return rows
-  }
-
-  // D-02: escapado de CSV a mano (RFC 4180 mínimo viable), otra
-  // responsabilidad más colgada del mismo servicio en vez de una utilidad
-  // compartida de exportación.
-  private escapeCsvField(value: string): string {
-    const needsQuoting = value.includes(',') || value.includes('"') || value.includes('\n')
-    if (!needsQuoting) return value
-    return `"${value.replace(/"/g, '""')}"`
+  exportRows(placementId: number) {
+    return this.report.exportRows(placementId)
   }
 
   private assertValidHourLogValues(dto: CreateHourLogDto): void {
