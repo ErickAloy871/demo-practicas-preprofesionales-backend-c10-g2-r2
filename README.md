@@ -31,9 +31,17 @@ máquina, cambia `POSTGRES_PORT` y `DATABASE_URL` en `.env` antes de `docker com
 | Variable | Valor por defecto | Descripción |
 |---|---|---|
 | `DATABASE_URL` | (requerido) | Cadena de conexión PostgreSQL |
-| `JWT_SECRET` | (requerido) | Secreto para firmar JWTs |
+| `JWT_SECRET` | (requerido) | Secreto para firmar JWTs. Para producción, genera uno seguro ejecutando `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
+| `JWT_EXPIRES_IN` | `15m` | Vida del token de acceso (segundos o sufijo `s`, `m`, `h`, `d`) |
+| `JWT_REFRESH_EXPIRES_IN` | `7d` | Vida máxima deslizante de la sesión renovable |
 | `PORT` | `3000` | Puerto donde escucha la API |
 | `CORS_ORIGIN` | `http://localhost:5173` | Origen permitido para requests desde el navegador (frontend Vite) |
+| `INSTITUTION_TIMEZONE` | `America/Guayaquil` | Zona horaria institucional para normalizar fechas del libro de horas |
+
+El login entrega el token de acceso en el cuerpo y guarda el token de renovación en
+una cookie `HttpOnly`. Cada renovación rota esa cookie y revoca la versión de acceso
+anterior; las sesiones se almacenan en `auth_sessions`, así que logout y renovación
+siguen revocados aunque se reinicie el servidor. Aplicar migraciones con `pnpm db:deploy`.
 
 Usuarios del seed (contraseña `yura1234` para todos):
 
@@ -161,8 +169,9 @@ muestra. Si ambos lados están en `DRAFT` o `SUBMITTED`, gana el más reciente.
 Si es tu primer día en este proyecto:
 
 1. Levanta el stack y confirma que `GET /api/offers` responde con las ofertas del seed.
-   Todos los endpoints salvo `POST /api/auth/login` exigen JWT: loguéate con un usuario
-   del seed y manda el `accessToken` como `Authorization: Bearer <token>`.
+   Los endpoints de dominio exigen JWT: loguéate con un usuario del seed y manda el
+   `accessToken` como `Authorization: Bearer <token>`. Renovación y logout usan la cookie
+   HttpOnly de la sesión.
 2. **Lee `KNOWN_ISSUES.md` completo.** El equipo anterior dejó problemas conocidos
    documentados ahí. No todos están documentados.
 3. Todavía no hay un backlog público de épicas: prioriza según lo que bloquee tu propio

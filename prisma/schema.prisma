@@ -79,8 +79,24 @@ model User {
   reviewedHourLogs  HourLog[]     @relation("HourLogReviewer")
   uploadedDocuments  Document[]   @relation("DocUploader")
   validatedDocuments Document[]   @relation("DocValidator")
+  authSessions       AuthSession[]
 
   @@map("users")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid())
+  userId           Int
+  refreshTokenHash String    @unique
+  tokenVersion     Int       @default(0)
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@map("auth_sessions")
 }
 
 model Company {
@@ -112,6 +128,10 @@ model Offer {
   status        OfferStatus @default(DRAFT)
   publishedAt   DateTime?
   createdAt     DateTime    @default(now())
+  // G2-19: contador que la base mantiene al día con un UPDATE condicional
+  // atómico (acceptedCount < seats), para que el cupo no dependa solo de
+  // leer y comparar desde la aplicacion.
+  acceptedCount Int         @default(0)
 
   company      Company       @relation(fields: [companyId], references: [id])
   applications Application[]
@@ -188,6 +208,9 @@ model HourLog {
   placement  Placement @relation(fields: [placementId], references: [id])
   reviewedBy User?     @relation("HourLogReviewer", fields: [reviewedById], references: [id])
 
+  // G2-21: el libro de horas filtra por placement y ordena por fecha
+  // (listForPlacement); sin este índice la consulta recorre la tabla entera.
+  @@index([placementId, date])
   @@index([updatedAt, id])
   @@map("hour_logs")
 }

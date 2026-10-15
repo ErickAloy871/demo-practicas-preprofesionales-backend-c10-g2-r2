@@ -3,12 +3,13 @@ import { ValidationPipe } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { HttpExceptionFilter } from './common/http-exception.filter'
+import { getAllowedCorsOrigins } from './common/cors.config'
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule)
   app.setGlobalPrefix('api')
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+    origin: getAllowedCorsOrigins(process.env.CORS_ORIGIN),
     credentials: true,
   })
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }))

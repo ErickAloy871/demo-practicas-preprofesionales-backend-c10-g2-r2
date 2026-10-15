@@ -48,18 +48,14 @@ acreditación adentro. Funciona — hasta donde sabemos — pero solo hay dos te
 cualquier cambio es a ciegas. Si te toca modificar reglas de acreditación, escribe primero
 tests de los casos que hoy funcionan.
 
-## D-06 · La validación de horas está en tres lados
+## D-06 · Resuelto: validación diaria de horas unificada
 
-`src/hour-log/dto/create-hour-log.dto.ts`, `src/hour-log/hour-log.service.ts` y el formulario
-del frontend.
+La auditoría encontró cinco copias, no tres: el DTO del backend permitía hasta 12 h; la
+creación y la exportación del servicio cortaban en 10 h; y el frontend repetía dos funciones
+con tope de 8 h. La sincronización no verificaba el límite.
 
-Y ya divergieron: el DTO acepta hasta 12 horas por registro y el servicio corta en 10. El
-formulario tiene su propia versión. Nadie recuerda cuál es la correcta.
+La coordinación confirmó la regla: un estudiante puede distribuir actividades en varias
+plazas, pero la suma de sus registros no eliminados para una misma fecha no puede pasar de
+8 h. El límite, su mensaje y la regla están centralizados en
+`src/hour-log/hour-log.validation.ts`; el flujo HTTP y el de sincronización lo usan.
 
-## D-07 · `JWT_SECRET` tiene un fallback hardcodeado
-
-`src/auth/auth.module.ts`
-
-Si la variable de entorno no está, el módulo arranca igual con un secreto por defecto que
-está en el código. Lo pusimos para no pelear con el entorno local y se quedó. En producción
-esto no puede quedar así.

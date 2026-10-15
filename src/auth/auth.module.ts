@@ -1,16 +1,23 @@
-import { Module } from '@nestjs/common'
+import { Module, Global } from '@nestjs/common'
 import { JwtModule } from '@nestjs/jwt'
 import { AuthController } from './auth.controller'
 import { AuthService } from './auth.service'
 import { JwtAuthGuard } from './guards/jwt-auth.guard'
 import { RolesGuard } from './guards/roles.guard'
+import { ACCESS_TOKEN_TTL_SECONDS } from './auth.config'
 
+const jwtSecret = process.env.JWT_SECRET
+if (!jwtSecret) {
+  throw new Error('FALTA VARIABLE DE ENTORNO: JWT_SECRET es requerida para firmar los tokens de sesión. Genera una y colócala en tu archivo .env (mira el README).')
+}
+
+@Global()
 @Module({
   imports: [
     JwtModule.register({
       global: true,
-      // D-07: fallback hardcodeado si falta la env. Documentado en KNOWN_ISSUES.md.
-      secret: process.env.JWT_SECRET ?? 'dev-secret-no-cambiar',
+      secret: jwtSecret,
+      signOptions: { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
     }),
   ],
   controllers: [AuthController],

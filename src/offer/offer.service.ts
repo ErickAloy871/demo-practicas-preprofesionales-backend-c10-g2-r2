@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { ApplicationStatus, OfferStatus } from '@prisma/client'
+import { ApplicationStatus, OfferStatus, Role } from '@prisma/client'
+import { assertCompanyScope, assertOfferScope } from '../common/ownership'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CreateOfferDto } from './dto/create-offer.dto'
 
@@ -7,7 +8,15 @@ import type { CreateOfferDto } from './dto/create-offer.dto'
 export class OfferService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(dto: CreateOfferDto) {
+  /** E3-01 (hallazgo 4a): una empresa no puede crear ofertas a nombre de otra. */
+  async create(dto: CreateOfferDto, userId: number, role: Role) {
+    await assertCompanyScope(
+      this.prisma,
+      dto.companyId,
+      userId,
+      role,
+      'no puedes crear ofertas a nombre de otra empresa',
+    )
     return this.prisma.offer.create({ data: { ...dto, status: OfferStatus.DRAFT } })
   }
 
@@ -19,9 +28,13 @@ export class OfferService {
     })
   }
 
-  async findOne(id: number) {
+  /** E3-01 (hallazgo 5): los borradores solo los ven su empresa dueña y la coordinación. */
+  async findOne(id: number, userId: number, role: Role) {
     const offer = await this.prisma.offer.findUnique({ where: { id }, include: { company: true } })
     if (!offer) throw new NotFoundException('oferta no encontrada')
+    if (offer.status !== OfferStatus.PUBLISHED) {
+      await assertCompanyScope(this.prisma, offer.companyId, userId, role, 'la oferta no está publicada')
+    }
     return offer
   }
 
@@ -39,9 +52,9 @@ export class OfferService {
     })
   }
 
-  async publish(id: number) {
-    const offer = await this.prisma.offer.findUnique({ where: { id } })
-    if (!offer) throw new NotFoundException('oferta no encontrada')
+  /** E3-01 (hallazgo 4b): solo la empresa dueña de la oferta puede publicarla. */
+  async publish(id: number, userId: number, role: Role) {
+    const offer = await assertOfferScope(this.prisma, id, userId, role, 'la oferta no es de tu empresa')
     if (offer.status !== OfferStatus.DRAFT) {
       throw new BadRequestException('solo se publican ofertas en DRAFT')
     }
@@ -51,9 +64,9 @@ export class OfferService {
     })
   }
 
-  async close(id: number) {
-    const offer = await this.prisma.offer.findUnique({ where: { id } })
-    if (!offer) throw new NotFoundException('oferta no encontrada')
+  /** E3-01 (hallazgo 4c): solo la empresa dueña de la oferta puede cerrarla. */
+  async close(id: number, userId: number, role: Role) {
+    const offer = await assertOfferScope(this.prisma, id, userId, role, 'la oferta no es de tu empresa')
     if (offer.status !== OfferStatus.PUBLISHED) {
       throw new BadRequestException('solo se cierran ofertas publicadas')
     }
