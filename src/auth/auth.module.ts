@@ -4,6 +4,7 @@ import { AuthController } from './auth.controller'
 import { AuthService } from './auth.service'
 import { JwtAuthGuard } from './guards/jwt-auth.guard'
 import { RolesGuard } from './guards/roles.guard'
+import { ACCESS_TOKEN_TTL_SECONDS } from './auth.config'
 
 const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret) {
@@ -16,6 +17,7 @@ if (!jwtSecret) {
     JwtModule.register({
       global: true,
       secret: jwtSecret,
+      signOptions: { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
     }),
   ],
   controllers: [AuthController],
