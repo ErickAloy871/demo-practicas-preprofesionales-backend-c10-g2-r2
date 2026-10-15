@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
+import { normalizeHourLogDate } from '../common/date-normalization'
 import { PrismaService } from '../prisma/prisma.service'
 import {
   HOUR_LOG_DAILY_LIMIT_MESSAGE,
@@ -20,7 +21,7 @@ function asStoredResponse(value: unknown): StoredResponse {
 
 function extractHourLogData(payload: Record<string, unknown>) {
   return {
-    date: new Date(String(payload.date)),
+    date: normalizeHourLogDate(payload.date as string | Date),
     startTime: String(payload.startTime),
     endTime: String(payload.endTime),
     hours: Number(payload.hours),

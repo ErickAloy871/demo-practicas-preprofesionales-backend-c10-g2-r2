@@ -36,6 +36,7 @@ máquina, cambia `POSTGRES_PORT` y `DATABASE_URL` en `.env` antes de `docker com
 | `JWT_REFRESH_EXPIRES_IN` | `7d` | Vida máxima deslizante de la sesión renovable |
 | `PORT` | `3000` | Puerto donde escucha la API |
 | `CORS_ORIGIN` | `http://localhost:5173` | Origen permitido para requests desde el navegador (frontend Vite) |
+| `INSTITUTION_TIMEZONE` | `America/Guayaquil` | Zona horaria institucional para normalizar fechas del libro de horas |
 
 El login entrega el token de acceso en el cuerpo y guarda el token de renovación en
 una cookie `HttpOnly`. Cada renovación rota esa cookie y revoca la versión de acceso
