@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
+import { normalizeHourLogDate } from '../common/date-normalization'
 import { PrismaService } from '../prisma/prisma.service'
 import { type Checkpoint, decodeCheckpoint, encodeCheckpoint } from './checkpoint'
 import type { SyncOperationInput, SyncOperationResult } from './dto/push.dto'
@@ -14,7 +15,7 @@ function asStoredResponse(value: unknown): StoredResponse {
 
 function extractHourLogData(payload: Record<string, unknown>) {
   return {
-    date: new Date(String(payload.date)),
+    date: normalizeHourLogDate(payload.date as string | Date),
     startTime: String(payload.startTime),
     endTime: String(payload.endTime),
     hours: Number(payload.hours),

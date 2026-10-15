@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { HourLogStatus, PlacementStatus, Role } from '@prisma/client'
+import { normalizeHourLogDate, validatePlacementPeriodAndFuture } from '../common/date-normalization'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CreateHourLogDto } from './dto/create-hour-log.dto'
 
@@ -7,7 +8,7 @@ import type { CreateHourLogDto } from './dto/create-hour-log.dto'
 // "god service". `create` valida el DTO, persiste el registro y dispara
 // una notificación al tutor; `review` maneja la máquina de estados de
 // aprobación; `approvedHours`/`progressReport`/`weeklySummary`/`exportRows`
-// agregan y transforman datos para reportes. Todo vive en el mismo archivo
+// agregan y transforman datos para reportes. La lógica vive en el mismo archivo
 // a propósito: no lo dividas en `HourLogValidationService`,
 // `HourLogNotificationService` ni `HourLogReportService`. El objetivo de
 // producto es que el equipo que reciba el template identifique el problema
@@ -45,11 +46,14 @@ export class HourLogService {
       throw new BadRequestException('la hora de inicio debe ser anterior a la de fin')
     }
 
-    // La fecha del registro llega desde el cliente y se persiste tal como fue recibida.
+    // G2-24: Normalización a la zona horaria institucional y validaciones de fecha.
+    const normalizedDate = normalizeHourLogDate(dto.date)
+    validatePlacementPeriodAndFuture(normalizedDate, placement)
+
     const created = await this.prisma.hourLog.create({
       data: {
         placementId: dto.placementId,
-        date: dto.date,
+        date: normalizedDate,
         startTime: dto.startTime,
         endTime: dto.endTime,
         hours: dto.hours,

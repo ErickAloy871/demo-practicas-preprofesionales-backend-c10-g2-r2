@@ -88,4 +88,128 @@ describe('HourLogService', () => {
     expect(result.status).toBe('REJECTED')
     expect(result.reviewNote).toBe('faltó detalle de la actividad')
   })
+
+  describe('G2-24: normalización de fechas y validaciones de periodo', () => {
+    const activePlacement = {
+      id: 1,
+      studentId: 5,
+      tutorId: 7,
+      status: 'ACTIVE',
+      startDate: new Date('2026-03-01'),
+      endDate: new Date('2026-07-31'),
+    }
+
+    it('produce el mismo resultado para dispositivos en zonas horarias distintas', async () => {
+      prisma.placement.findUnique.mockResolvedValue(activePlacement)
+      prisma.hourLog.create.mockImplementation(({ data }) => Promise.resolve({ id: 100, ...data }))
+
+      const payloads = [
+        { desc: 'Local (Ecuador, UTC-5)', date: '2026-04-15' },
+        { desc: 'Tokio (UTC+9)', date: '2026-04-15T00:00:00+09:00' },
+        { desc: 'Madrid (UTC+2)', date: '2026-04-15T00:00:00+02:00' },
+        { desc: 'California (UTC-7)', date: '2026-04-15T00:00:00-07:00' },
+        { desc: 'Noche en Ecuador (20:00)', date: '2026-04-15T20:00:00-05:00' },
+      ]
+
+      for (const item of payloads) {
+        const result = await service.create(
+          {
+            placementId: 1,
+            date: item.date as unknown as Date,
+            startTime: '08:00',
+            endTime: '12:00',
+            hours: 4,
+            activity: `Test desde ${item.desc}`,
+          },
+          5,
+        )
+
+        expect(result.date.toISOString()).toBe('2026-04-15T00:00:00.000Z')
+      }
+    })
+
+    it('rechaza con mensaje del rango válido si la fecha es anterior a startDate', async () => {
+      prisma.placement.findUnique.mockResolvedValue(activePlacement)
+
+      await expect(
+        service.create(
+          {
+            placementId: 1,
+            date: new Date('2026-02-28'),
+            startTime: '08:00',
+            endTime: '12:00',
+            hours: 4,
+            activity: 'Antes de empezar la práctica',
+          },
+          5,
+        ),
+      ).rejects.toThrowError(
+        'la fecha está fuera del periodo de la práctica (rango válido: 2026-03-01 a 2026-07-31)',
+      )
+    })
+
+    it('rechaza con mensaje del rango válido si la fecha es posterior a endDate', async () => {
+      prisma.placement.findUnique.mockResolvedValue(activePlacement)
+
+      await expect(
+        service.create(
+          {
+            placementId: 1,
+            date: new Date('2026-08-01'),
+            startTime: '08:00',
+            endTime: '12:00',
+            hours: 4,
+            activity: 'Después de terminar la práctica',
+          },
+          5,
+        ),
+      ).rejects.toThrowError(
+        'la fecha está fuera del periodo de la práctica (rango válido: 2026-03-01 a 2026-07-31)',
+      )
+    })
+
+    it('permite registrar en los límites del periodo (startDate y endDate)', async () => {
+      prisma.placement.findUnique.mockResolvedValue(activePlacement)
+      prisma.hourLog.create.mockImplementation(({ data }) => Promise.resolve({ id: 101, ...data }))
+
+      const onStart = await service.create(
+        { placementId: 1, date: new Date('2026-03-01'), startTime: '08:00', endTime: '12:00', hours: 4, activity: 'Primer día' },
+        5,
+      )
+      expect(onStart.date.toISOString()).toBe('2026-03-01T00:00:00.000Z')
+
+      const onEnd = await service.create(
+        { placementId: 1, date: new Date('2026-07-31'), startTime: '08:00', endTime: '12:00', hours: 4, activity: 'Último día' },
+        5,
+      )
+      expect(onEnd.date.toISOString()).toBe('2026-07-31T00:00:00.000Z')
+    })
+
+    it('rechaza registrar horas con fecha futura', async () => {
+      // Placement activo en el futuro lejano
+      const futurePlacement = {
+        ...activePlacement,
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2099-12-31'),
+      }
+      prisma.placement.findUnique.mockResolvedValue(futurePlacement)
+
+      const tomorrow = new Date()
+      tomorrow.setDate(tomorrow.getDate() + 1)
+
+      await expect(
+        service.create(
+          {
+            placementId: 1,
+            date: tomorrow,
+            startTime: '08:00',
+            endTime: '12:00',
+            hours: 4,
+            activity: 'Horas del futuro',
+          },
+          5,
+        ),
+      ).rejects.toThrowError('no se pueden registrar horas con fecha futura')
+    })
+  })
 })

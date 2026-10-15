@@ -34,6 +34,7 @@ máquina, cambia `POSTGRES_PORT` y `DATABASE_URL` en `.env` antes de `docker com
 | `JWT_SECRET` | (requerido) | Secreto para firmar JWTs. Para producción, genera uno seguro ejecutando `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
 | `PORT` | `3000` | Puerto donde escucha la API |
 | `CORS_ORIGIN` | `http://localhost:5173` | Origen permitido para requests desde el navegador (frontend Vite) |
+| `INSTITUTION_TIMEZONE` | `America/Guayaquil` | Zona horaria institucional para normalizar fechas del libro de horas |
 
 Usuarios del seed (contraseña `yura1234` para todos):
 
