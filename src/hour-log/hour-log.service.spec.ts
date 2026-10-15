@@ -1,9 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { HourLogNotificationService } from './hour-log.notification.service'
-import { HourLogReportService } from './hour-log.report.service'
 import { HourLogService } from './hour-log.service'
-import { HourLogValidationService } from './hour-log.validation.service'
 
 const prisma = {
   hourLog: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn(), aggregate: vi.fn() },
@@ -15,12 +12,8 @@ describe('HourLogService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    const validation = new HourLogValidationService()
-    const notification = new HourLogNotificationService()
-    const report = new HourLogReportService(prisma as never, validation)
-    service = new HourLogService(prisma as never, validation, notification, report)
+    service = new HourLogService(prisma as never)
   })
-
 
   it('creates an hour log in SUBMITTED for an active placement', async () => {
     prisma.placement.findUnique.mockResolvedValue({ id: 1, studentId: 5, tutorId: 7, status: 'ACTIVE' })

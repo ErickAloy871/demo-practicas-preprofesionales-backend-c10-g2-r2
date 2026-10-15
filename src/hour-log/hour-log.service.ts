@@ -16,12 +16,20 @@ import { HourLogValidationService } from './hour-log.validation.service'
  */
 @Injectable()
 export class HourLogService {
+  private readonly validation: HourLogValidationService
+  private readonly notification: HourLogNotificationService
+  private readonly report: HourLogReportService
+
   constructor(
     private readonly prisma: PrismaService,
-    private readonly validation: HourLogValidationService,
-    private readonly notification: HourLogNotificationService,
-    private readonly report: HourLogReportService,
-  ) {}
+    validation?: HourLogValidationService,
+    notification?: HourLogNotificationService,
+    report?: HourLogReportService,
+  ) {
+    this.validation = validation ?? new HourLogValidationService()
+    this.notification = notification ?? new HourLogNotificationService()
+    this.report = report ?? new HourLogReportService(prisma, this.validation)
+  }
 
   /**
    * Registra una jornada de horas para el placement del estudiante.
