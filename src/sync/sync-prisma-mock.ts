@@ -7,11 +7,11 @@ type HourLogRow = { id: number; placementId: number; version: number }
 type TxClient = {
   syncOperation: { findUnique: Mock; create: Mock }
   placement: { findUnique: Mock }
-  hourLog: { findUnique: Mock; create: Mock; update: Mock }
+  hourLog: { aggregate: Mock; findUnique: Mock; create: Mock; update: Mock }
 }
 
 export class SyncPrismaMock {
-  readonly state = { syncOps: new Map<string, SyncOperationRow>(), hourLogs: [] as HourLogRow[] }
+  readonly state = { syncOps: new Map<string, SyncOperationRow>(), hourLogs: [] as HourLogRow[], dailyHours: 0 }
   private readonly locks = new Set<string>()
   private nextId = 1
   readonly client: {
@@ -64,7 +64,7 @@ class TxHandle {
   private pendingSyncOp: SyncOperationRow | null = null
 
   constructor(
-    private readonly state: { syncOps: Map<string, SyncOperationRow>; hourLogs: HourLogRow[] },
+    private readonly state: { syncOps: Map<string, SyncOperationRow>; hourLogs: HourLogRow[]; dailyHours: number },
     private readonly locks: Set<string>,
     public nextId: number,
     pU: Mock, hU: Mock, hUp: Mock,
@@ -75,7 +75,12 @@ class TxHandle {
         create: vi.fn().mockImplementation((a) => this.createSyncOp(a)),
       },
       placement: { findUnique: pU },
-      hourLog: { findUnique: hU, create: vi.fn().mockImplementation((a) => this.createHour(a)), update: hUp },
+      hourLog: {
+        aggregate: vi.fn().mockImplementation(() => Promise.resolve({ _sum: { hours: this.state.dailyHours } })),
+        findUnique: hU,
+        create: vi.fn().mockImplementation((a) => this.createHour(a)),
+        update: hUp,
+      },
     }
   }
 

@@ -3,6 +3,12 @@ import { HourLogStatus, PlacementStatus, Role } from '@prisma/client'
 import { normalizeHourLogDate, validatePlacementPeriodAndFuture } from '../common/date-normalization'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CreateHourLogDto } from './dto/create-hour-log.dto'
+import {
+  HOUR_LOG_DAILY_LIMIT_MESSAGE,
+  dailyHourLogsWhere,
+  exceedsDailyHourLimit,
+  validateHourLogValues,
+} from './hour-log.validation'
 import { HourLogNotificationService } from './hour-log.notification.service'
 import { HourLogReportService } from './hour-log.report.service'
 import { HourLogValidationService } from './hour-log.validation.service'
@@ -45,12 +51,12 @@ export class HourLogService {
       throw new BadRequestException('el placement no está activo')
     }
 
-    this.validation.validateHourRange(dto.hours)
-    this.validation.validateTimeRange(dto.startTime, dto.endTime)
-
     // G2-24: Normalización a la zona horaria institucional y validaciones de fecha.
     const normalizedDate = normalizeHourLogDate(dto.date)
     validatePlacementPeriodAndFuture(normalizedDate, placement)
+
+    this.assertValidHourLogValues({ ...dto, date: normalizedDate })
+    await this.assertDailyHourLimit(placement.studentId, normalizedDate, dto.hours)
 
     const created = await this.prisma.hourLog.create({
       data: {
@@ -128,5 +134,20 @@ export class HourLogService {
 
   exportRows(placementId: number) {
     return this.report.exportRows(placementId)
+  }
+
+  private assertValidHourLogValues(dto: CreateHourLogDto): void {
+    const message = validateHourLogValues(dto)
+    if (message) throw new BadRequestException(message)
+  }
+
+  private async assertDailyHourLimit(studentId: number, date: Date, hours: number): Promise<void> {
+    const result = await this.prisma.hourLog.aggregate({
+      where: dailyHourLogsWhere(studentId, date),
+      _sum: { hours: true },
+    })
+    if (exceedsDailyHourLimit(result._sum.hours ?? 0, hours)) {
+      throw new BadRequestException(HOUR_LOG_DAILY_LIMIT_MESSAGE)
+    }
   }
 }

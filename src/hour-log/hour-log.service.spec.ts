@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common'
+import { ForbiddenException } from '@nestjs/common'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { HourLogService } from './hour-log.service'
 
@@ -12,6 +12,7 @@ describe('HourLogService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    prisma.hourLog.aggregate.mockResolvedValue({ _sum: { hours: 0 } })
     service = new HourLogService(prisma as never)
   })
 
@@ -28,15 +29,30 @@ describe('HourLogService', () => {
     expect(result.hours).toBe(4)
   })
 
-  it('rejects an hour log with more hours than the service allows', async () => {
+  it('allows exactly eight accumulated hours in a day', async () => {
     prisma.placement.findUnique.mockResolvedValue({ id: 1, studentId: 5, tutorId: 7, status: 'ACTIVE' })
+    prisma.hourLog.aggregate.mockResolvedValue({ _sum: { hours: 7.5 } })
+    prisma.hourLog.create.mockImplementation(({ data }) => Promise.resolve({ id: 99, ...data }))
 
     await expect(
       service.create(
-        { placementId: 1, date: new Date('2026-04-01'), startTime: '08:00', endTime: '20:00', hours: 11, activity: 'Jornada larga de soporte' },
+        { placementId: 1, date: new Date('2026-04-01'), startTime: '08:00', endTime: '08:30', hours: 0.5, activity: 'Cierre diario' },
         5,
       ),
-    ).rejects.toThrow(BadRequestException)
+    ).resolves.toMatchObject({ hours: 0.5 })
+  })
+
+  it('rejects a new activity that would make the student exceed eight hours in a day', async () => {
+    prisma.placement.findUnique.mockResolvedValue({ id: 1, studentId: 5, tutorId: 7, status: 'ACTIVE' })
+    prisma.hourLog.aggregate.mockResolvedValue({ _sum: { hours: 7.5 } })
+
+    await expect(
+      service.create(
+        { placementId: 1, date: new Date('2026-04-01'), startTime: '08:00', endTime: '09:00', hours: 1, activity: 'Jornada adicional' },
+        5,
+      ),
+    ).rejects.toThrow('No puedes registrar más de 8 horas en un mismo día')
+    expect(prisma.hourLog.create).not.toHaveBeenCalled()
   })
 
   it('approves a submitted hour log when the caller is the assigned tutor', async () => {
