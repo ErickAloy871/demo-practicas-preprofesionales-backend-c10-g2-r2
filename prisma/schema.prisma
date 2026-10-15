@@ -128,6 +128,10 @@ model Offer {
   status        OfferStatus @default(DRAFT)
   publishedAt   DateTime?
   createdAt     DateTime    @default(now())
+  // G2-19: contador que la base mantiene al día con un UPDATE condicional
+  // atómico (acceptedCount < seats), para que el cupo no dependa solo de
+  // leer y comparar desde la aplicacion.
+  acceptedCount Int         @default(0)
 
   company      Company       @relation(fields: [companyId], references: [id])
   applications Application[]
