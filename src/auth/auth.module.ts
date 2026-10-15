@@ -10,6 +10,7 @@ if (!jwtSecret) {
   throw new Error('FALTA VARIABLE DE ENTORNO: JWT_SECRET es requerida para firmar los tokens de sesión. Genera una y colócala en tu archivo .env (mira el README).')
 }
 
+@Global()
 @Module({
   imports: [
     JwtModule.register({
