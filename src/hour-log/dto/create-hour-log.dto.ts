@@ -1,10 +1,19 @@
-import { Type } from 'class-transformer'
+import { Transform } from 'class-transformer'
 import { IsDate, IsInt, IsString, Matches, Max, MaxLength, Min } from 'class-validator'
+import { normalizeHourLogDate } from '../../common/date-normalization'
 
 export class CreateHourLogDto {
   @IsInt() placementId!: number
 
-  @Type(() => Date) @IsDate() date!: Date
+  @Transform(({ value }) => {
+    try {
+      return normalizeHourLogDate(value)
+    } catch {
+      return new Date(NaN)
+    }
+  })
+  @IsDate()
+  date!: Date
 
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) startTime!: string
 

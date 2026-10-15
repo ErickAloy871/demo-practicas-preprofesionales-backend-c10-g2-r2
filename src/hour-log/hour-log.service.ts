@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { HourLogStatus, PlacementStatus, Role } from '@prisma/client'
+import { normalizeHourLogDate, validatePlacementPeriodAndFuture } from '../common/date-normalization'
 import { PrismaService } from '../prisma/prisma.service'
 import type { CreateHourLogDto } from './dto/create-hour-log.dto'
 import { HourLogNotificationService } from './hour-log.notification.service'
@@ -47,10 +48,14 @@ export class HourLogService {
     this.validation.validateHourRange(dto.hours)
     this.validation.validateTimeRange(dto.startTime, dto.endTime)
 
+    // G2-24: Normalización a la zona horaria institucional y validaciones de fecha.
+    const normalizedDate = normalizeHourLogDate(dto.date)
+    validatePlacementPeriodAndFuture(normalizedDate, placement)
+
     const created = await this.prisma.hourLog.create({
       data: {
         placementId: dto.placementId,
-        date: dto.date,
+        date: normalizedDate,
         startTime: dto.startTime,
         endTime: dto.endTime,
         hours: dto.hours,
