@@ -39,14 +39,16 @@ rompe.
 Con menos de 200 postulaciones no se nota. Arriba de eso, la pantalla de la empresa tarda
 varios segundos. Sospechamos que es cómo traemos los estudiantes, pero no lo medimos.
 
-## D-05 · `calculateAccreditationStatus` da miedo tocarla
+## D-05 · Resuelto: reglas de acreditación como tabla ordenada
 
-`src/placement/accreditation.ts`
+`calculateAccreditationStatus` tenía seis niveles de `if` anidados y ESLint la marcaba por
+complejidad (17 ciclomática y 84 cognitiva); solo había dos tests, así que cualquier cambio
+era a ciegas.
 
-ESLint la marca por complejidad. Son `if` anidados hasta seis niveles con toda la lógica de
-acreditación adentro. Funciona — hasta donde sabemos — pero solo hay dos tests, así que
-cualquier cambio es a ciegas. Si te toca modificar reglas de acreditación, escribe primero
-tests de los casos que hoy funcionan.
+La historia E5-02 separó el qué del cómo: las reglas viven en `ACCREDITATION_RULES`, una
+tabla ordenada donde cada regla declara su id, un resumen en una frase, cuándo aplica y qué
+decide, y el motor solo recorre la tabla. ESLint ya no marca la función y las 40 pruebas de
+caracterización de E5-01 fijan el comportamiento.
 
 ## D-06 · Resuelto: validación diaria de horas unificada
 
